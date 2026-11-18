@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Restructured Office Roguelite</title>
+<style>
+  :root { --paper:#f6f1e1; --ink:#23252d; --red:#c8402f; --bg:#1b1d24; }
+  html, body { margin:0; height:100%; background:var(--bg); overflow:hidden; font-family:"Courier New", Courier, monospace; color:var(--ink); }
+  #game { display:block; width:100vw; height:100vh; touch-action:none; cursor:crosshair; }
+  #overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(15,16,22,.72); padding:16px; box-sizing:border-box; overflow:auto; }
+  #overlay.on { display:flex; }
+  .memo { background:var(--paper); max-width:560px; width:100%; padding:22px 26px 24px; box-sizing:border-box; box-shadow:0 12px 40px rgba(0,0,0,.5); transform:rotate(-.6deg); border-top:10px solid var(--red); margin:auto; }
+  .memo small { letter-spacing:.25em; font-size:11px; opacity:.6; }
+  .memo h1 { margin:6px 0 2px; font-size:clamp(28px,7vw,44px); letter-spacing:.04em; line-height:1; }
+  .memo h2 { margin:0 0 12px; font-size:14px; font-weight:normal; opacity:.7; }
+  .memo p { font-size:14px; line-height:1.5; margin:10px 0; }
+  .memo .keys { font-size:12px; border-top:1px dashed #999; padding-top:10px; opacity:.85; }
+  .memo canvas { display:block; margin:6px auto; }
+  .btns { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+  button { font:inherit; font-weight:bold; font-size:14px; background:var(--ink); color:var(--paper); border:0; padding:12px 16px; cursor:pointer; flex:1 1 150px; text-align:left; }
+  button:hover, button:focus-visible { background:var(--red); outline:none; }
+  button span { display:block; font-weight:normal; font-size:12px; opacity:.8; margin-top:3px; }
+  #dash { position:fixed; right:18px; bottom:150px; width:64px; height:64px; border-radius:50%; flex:none; display:none; text-align:center; padding:0; font-size:11px; background:rgba(246,241,225,.25); color:#fff; border:2px solid rgba(255,255,255,.5); touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="overlay"></div>
+<button id="dash">ROLL</button>
+<script src="game.js"></script>
+</body>
+</html>
