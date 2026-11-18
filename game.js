@@ -14,19 +14,23 @@ const sx = (x, y) => (x - y) * HW, sy = (x, y) => (x + y) * HH;   // world tile 
 const I = (x, y) => y * N + x;
 
 // ---------------------------------------------------------------- content
-const PIECE_NAME = { legs: 'THE LEGS', arms: 'THE ARMS', torso: 'THE TORSO', head: 'THE HEAD', toupee: 'THE TOUPEE', trophy: 'A GOLDEN STAPLER' };
-const ORDER = ['legs', 'arms', 'torso', 'head', 'toupee'];
+// The boss, as cubes. Front view, one character per cube.
+const MODEL = ['.HHH.', '.SSS.', 'JJTJJ', 'JJTJJ', 'KJJJK', '.PPP.', '.P.P.', 'BB.BB'];
+const CCOL = { H: '#6b3d14', S: '#f0c39a', J: '#3a3f4e', T: '#c8402f', K: '#f0c39a', P: '#4a4f5e', B: '#1d1d22' };
+const CELLS = [];   // bottom-up, so he is rebuilt from the shoes
+for (let r = MODEL.length - 1; r >= 0; r--) for (let c = 0; c < 5; c++) if (MODEL[r][c] !== '.') CELLS.push({ c, r, col: CCOL[MODEL[r][c]] });
+const PER_FLOOR = 6, GOLD = '#ffd84a';
 const FLOORS = [
   { name: 'MAILROOM', carpet: ['#8a93a6', '#828b9e'], part: '#73839c',
-    boss: { name: 'Dennis from the Mailroom', look: 'intern', piece: 'legs', line: 'is using THE LEGS as a coat rack.', pats: ['charge', 'burst'] } },
+    boss: { name: 'Dennis from the Mailroom', look: 'intern', line: 'is using a boss cube as a footstool.', pats: ['charge', 'burst'] } },
   { name: 'ACCOUNTING', carpet: ['#7d9c84', '#75947c'], part: '#5f7f68',
-    boss: { name: 'Brenda from Accounting', look: 'acct', piece: 'arms', line: 'is using THE ARMS as back-scratchers.', pats: ['aimed', 'burst', 'aimed'] } },
+    boss: { name: 'Brenda from Accounting', look: 'acct', line: 'has logged a boss cube as a fixed asset.', pats: ['aimed', 'burst', 'aimed'] } },
   { name: 'SALES', carpet: ['#b3946f', '#ab8c67'], part: '#8f7350',
-    boss: { name: 'Chad from Sales', look: 'sales', piece: 'torso', line: 'is wearing THE TORSO as a power suit.', pats: ['charge', 'charge', 'summon', 'burst'] } },
+    boss: { name: 'Chad from Sales', look: 'sales', line: 'is curling a boss cube for the gains.', pats: ['charge', 'charge', 'summon', 'burst'] } },
   { name: 'I.T.', carpet: ['#6f7399', '#676b91'], part: '#4f5378',
-    boss: { name: 'Priya from I.T.', look: 'it', piece: 'head', line: 'is using THE HEAD for rubber-duck debugging.', pats: ['spiral', 'summon', 'aimed'] } },
+    boss: { name: 'Priya from I.T.', look: 'it', line: 'is rubber-duck debugging with a boss cube.', pats: ['spiral', 'summon', 'aimed'] } },
   { name: 'HUMAN RESOURCES', carpet: ['#9a7391', '#926b89'], part: '#75506c',
-    boss: { name: 'Linda from HR', look: 'hr', piece: 'toupee', line: "has filed THE TOUPEE under 'Miscellaneous'.", pats: ['burst', 'charge', 'spiral', 'summon', 'aimed'] } },
+    boss: { name: 'Linda from HR', look: 'hr', line: "has filed a boss cube under 'Miscellaneous'.", pats: ['burst', 'charge', 'spiral', 'summon', 'aimed'] } },
 ];
 const LOOKS = {
   player: { shirt: '#f4f4f0', tie: '#d33b2f', hair: '#3a2a1a', skin: '#f0c39a', pants: '#33384a', stapler: true },
@@ -64,7 +68,7 @@ const PERKS = [
 let W = 0, H = 0, DPR = 1, Z = 1;
 let state = 'title', floor = 1, level = null, player = null, time = 0, overtime = false;
 let enemies = [], projs = [], pickups = [], parts = [], texts = [];
-let pieces = [], trophies = 0, kills = 0, elevOpen = false, bossRef = null;
+let have = [], spare = 0, floorFound = 0, kills = 0, elevOpen = false, bossRef = null;
 let banner = null, shake = 0, flowT = 0, flow = null, cam = { x: 0, y: 0 };
 const K = {}, mouse = { x: 0, y: 0, down: false }, sticks = { move: null, aim: null };
 let touchMode = false, dashQueued = false, muted = false, ac = null;
@@ -210,12 +214,19 @@ function buildLevel(fl) {
       statics.push({ k: x + y + 1, x, y, wall: true, h: tall ? 52 : 16, winL: tall && fl1(x, y + 1) && x % 3 === 1, winR: tall && fl1(x + 1, y) && y % 3 === 1 });
     } else if (prop[i]) statics.push({ k: x + y + 1, x, y, prop: prop[i] });
   }
-  return { ...L, rooms, start, holder, elev, reach, spawns, coffees, fc, statics, seen: new Uint8Array(N * N), mini: null };
+  const propAt = {}, startZone = rooms.indexOf(start) + 1, hideable = [];
+  for (const st of statics) if (st.prop) {
+    propAt[I(st.x, st.y)] = st;
+    if (zone[I(st.x, st.y)] !== startZone && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => reach[I(st.x + a, st.y + b)] >= 0)) hideable.push(st);
+  }
+  hideable.sort(() => Math.random() - .5);
+  const others = rooms.filter(r => r !== start && r !== holder), loose = spot(pick(others)) || spot(holder);
+  return { ...L, rooms, start, holder, elev, reach, spawns, coffees, fc, statics, propAt, hidden: hideable.slice(0, 2), loose, seen: new Uint8Array(N * N), mini: null };
 }
 
 // ---------------------------------------------------------------- game flow
 function newGame() {
-  floor = 1; overtime = false; pieces = []; trophies = 0; kills = 0;
+  floor = 1; overtime = false; have = CELLS.map(() => false); spare = 0; kills = 0;
   player = { x: 0, y: 0, r: .28, hp: 5, maxHp: 5, speed: 4.4, dmg: 1, fireCd: .32, shots: 1, pierce: 0, dashMax: 1.2,
     cd: 0, dashCd: 0, dashT: 0, dx: 1, dy: 1, inv: 0, walk: 0, face: 1, moving: false, hurtT: 0 };
   startFloor();
@@ -227,8 +238,17 @@ function startFloor() {
   enemies = []; projs = []; pickups = []; parts = []; texts = []; elevOpen = false; bossRef = null; flowT = 0;
   for (const s of level.spawns) enemies.push(s.boss ? makeBoss(s.x, s.y) : makeEnemy(s.kind, s.x, s.y));
   for (const c of level.coffees) pickups.push({ x: c.x, y: c.y, kind: 'coffee' });
+  // hand out this floor's cubes: 1 with the floor boss, 2 carried by coworkers, 2 hidden in furniture, 1 lying around
+  let ids = floor <= 5 ? CELLS.map((_, i) => i).slice((floor - 1) * PER_FLOOR, floor * PER_FLOOR) : CELLS.map((_, i) => i).filter(i => !have[i]).slice(0, PER_FLOOR);
+  while (ids.length < PER_FLOOR) ids.push(-1);          // overtime spares are golden
+  ids.sort(() => Math.random() - .5); floorFound = 0;
+  enemies.find(e => e.boss).cube = ids[0];
+  const staff = enemies.filter(e => !e.boss).sort(() => Math.random() - .5);
+  staff.slice(0, 2).forEach((e, i) => e.cube = ids[1 + i]);
+  level.hidden.forEach((st, i) => st.cube = ids[3 + i]);
+  if (level.loose) pickups.push({ x: level.loose.x, y: level.loose.y, kind: 'cube', id: ids[5] });
   const th = level.th;
-  say(`FLOOR ${floor} — ${th.name}${floor > 5 ? ' (OVERTIME)' : ''}`, floor > 5 ? 'Find the Golden Stapler.' : `${th.boss.name} ${th.boss.line}`);
+  say(`FLOOR ${floor} — ${th.name}${floor > 5 ? ' (OVERTIME)' : ''}`, `${PER_FLOOR} boss cubes are hidden here. Check the furniture.`);
   cam.x = sx(p.x, p.y); cam.y = sy(p.x, p.y);
   state = 'play'; overlay.className = '';
 }
@@ -241,7 +261,7 @@ function makeEnemy(kind, x, y) {
 function makeBoss(x, y) {
   const b = level.th.boss, hp = 26 + floor * 10;
   return { kind: 'boss', boss: true, name: b.name, x, y, r: .46, hp, maxHp: hp, spd: 2.3, ai: 'boss', look: { ...LOOKS[b.look], s: 1.55 }, pats: b.pats, pi: 0,
-    piece: floor > 5 ? 'trophy' : b.piece, barks: ['This is MINE now!', 'Finders keepers!', "I'm escalating this!", 'Take it up with HR!'],
+    barks: ['This is MINE now!', 'Finders keepers!', "I'm escalating this!", 'Take it up with HR!'],
     awake: false, cd: 1.2, state: '', st: 0, flash: 0, walk: 0, face: 1, strafe: 1, barkT: 0, sa: 0, sc: 0 };
 }
 
@@ -285,7 +305,7 @@ function shootAng(e, a, spd, kind) {
 }
 function wake(e) {
   e.awake = true; bark(e);
-  if (e.boss && !bossRef) { bossRef = e; say(e.name.toUpperCase(), floor > 5 ? 'is back for overtime.' : level.th.boss.line.replace(/^./, c => c.toUpperCase()), 3.5); sfx(110, .5, 'sawtooth', .05, 80); }
+  if (e.boss && !bossRef) { bossRef = e; say(e.name.toUpperCase(), level.th.boss.line.replace(/^./, c => c.toUpperCase()), 3.5); sfx(110, .5, 'sawtooth', .05, 80); }
 }
 function bark(e) { if (e.barkT <= 0) { floatText(e.x, e.y, pick(e.barks), '#fff3b0'); e.barkT = rnd(4, 8); } }
 function startWind(e, dx, dy, d) { e.state = 'wind'; e.st = e.boss ? .65 : .55; e.cvx = dx / d; e.cvy = dy / d; sfx(200, .3, 'triangle', .04, 300); }
@@ -351,14 +371,29 @@ function hitEnemy(e, dmg, vx, vy) {
   if (e.hp > 0) return;
   enemies.splice(enemies.indexOf(e), 1); kills++;
   confetti(e.x, e.y, e.boss ? 40 : 12, e.look.shirt); sfx(240, .18, 'square', .05, -200);
+  if (e.cube !== undefined) pickups.push({ x: e.x, y: e.y, kind: 'cube', id: e.cube, hop: .4 });
   if (e.boss) {
-    pickups.push({ x: e.x, y: e.y, kind: 'piece', piece: e.piece });
+    elevOpen = true; say('THE ELEVATOR IS OPEN', 'Leave now, or keep searching for the cubes you missed.', 4.5);
     for (const q of projs) if (q.from === 'e') q.life = 0; shake = 12;
     floatText(e.x, e.y, 'I quit!', '#fff3b0');
   } else {
     floatText(e.x, e.y, pick(['Out of office!', 'Taking a sick day…', 'OOO', "I'll email you.", 'Ow, my KPIs!']), '#ddd');
     const r = Math.random(); if (r < .13) pickups.push({ x: e.x, y: e.y, kind: 'coffee' }); else if (r < .16) pickups.push({ x: e.x, y: e.y, kind: 'donut' });
   }
+}
+// staples knock hidden cubes out of furniture
+function searchProp(x, y) {
+  const st = level.propAt[I(x, y)]; if (!st) return;
+  st.shakeT = .3;
+  if (st.cube === undefined) return;
+  let best = null, bd = 1e9;
+  for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) {
+    if (solid(x + a, y + b)) continue;
+    const d = Math.hypot(x + a + .5 - player.x, y + b + .5 - player.y); if (d < bd) { bd = d; best = { x: x + a + .5, y: y + b + .5 }; }
+  }
+  if (!best) return;
+  pickups.push({ ...best, kind: 'cube', id: st.cube, hop: .4 }); delete st.cube;
+  floatText(x + .5, y + .5, 'Something fell out!', '#ffd84a'); confetti(x + .5, y + .5, 14, '#ffd84a'); sfx(900, .15, 'triangle', .05, 500);
 }
 function confetti(x, y, n, c) {
   for (let i = 0; i < n; i++) parts.push({ x, y, z: rnd(8, 24), vx: rnd(-3, 3), vy: rnd(-3, 3), vz: rnd(40, 120), t: rnd(.5, 1.1), c: Math.random() < .5 ? '#fff' : c, rot: rnd(6) });
@@ -427,7 +462,7 @@ function update(dt) {
   for (let i = projs.length - 1; i >= 0; i--) {
     const q = projs[i]; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt;
     let dead = q.life <= 0;
-    if (!dead && solid(Math.floor(q.x), Math.floor(q.y))) { dead = true; parts.push({ x: q.x, y: q.y, z: 14, vx: 0, vy: 0, vz: 30, t: .2, c: '#fff', rot: 0 }); }
+    if (!dead && solid(Math.floor(q.x), Math.floor(q.y))) { dead = true; if (q.from === 'p') searchProp(Math.floor(q.x), Math.floor(q.y)); parts.push({ x: q.x, y: q.y, z: 14, vx: 0, vy: 0, vz: 30, t: .2, c: '#fff', rot: 0 }); }
     if (!dead && q.from === 'p') {
       for (const e of enemies) {
         if (q.hit.includes(e) || Math.hypot(e.x - q.x, e.y - q.y) > e.r + q.r + .08) continue;
@@ -440,12 +475,14 @@ function update(dt) {
 
   // --- pickups
   for (let i = pickups.length - 1; i >= 0; i--) {
-    const k = pickups[i]; if (Math.hypot(k.x - p.x, k.y - p.y) > .7) continue;
-    if (k.kind === 'piece') {
-      if (k.piece === 'trophy') trophies++; else pieces.push(k.piece);
-      elevOpen = true; say(`RECOVERED: ${PIECE_NAME[k.piece]}`, 'The elevator is open. Follow the arrow.', 4.5);
-      [523, 659, 784, 1047].forEach((f, n) => setTimeout(() => sfx(f, .18, 'triangle', .06), n * 110));
-      confetti(p.x, p.y, 30, '#ffd84a');
+    const k = pickups[i]; if (k.hop > 0) k.hop -= dt;
+    if (k.hop > .15 || Math.hypot(k.x - p.x, k.y - p.y) > .7) continue;
+    if (k.kind === 'cube') {
+      if (k.id >= 0) have[k.id] = true; else spare++;
+      floorFound++;
+      floatText(p.x, p.y, `BOSS CUBE ${floorFound}/${PER_FLOOR}`, '#ffd84a');
+      [523, 659, 784].forEach((f, n) => setTimeout(() => sfx(f, .16, 'triangle', .06), n * 90));
+      confetti(p.x, p.y, 18, '#ffd84a');
     } else {
       if (p.hp >= p.maxHp) continue;
       p.hp = Math.min(p.maxHp, p.hp + (k.kind === 'donut' ? 2 : 1)); floatText(p.x, p.y, k.kind === 'donut' ? 'Donut!' : 'Coffee!', '#9f9'); sfx(660, .12, 'triangle', .05, 300);
@@ -461,6 +498,7 @@ function update(dt) {
 
   // --- fx
   for (let i = parts.length - 1; i >= 0; i--) { const q = parts[i]; q.t -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt; q.vz -= 300 * dt; if (q.z < 0) { q.z = 0; q.vx = q.vy = 0; } if (q.t <= 0) parts.splice(i, 1); }
+  for (const st of level.statics) if (st.shakeT > 0) st.shakeT -= dt;
   for (let i = texts.length - 1; i >= 0; i--) { texts[i].t -= dt; if (texts[i].t <= 0) texts.splice(i, 1); }
   if (banner && (banner.t -= dt) <= 0) banner = null;
   shake = Math.max(0, shake - dt * 30);
@@ -549,23 +587,25 @@ function person(x, y, L, o) {
   ctx.restore();
 }
 
-// boss body parts, drawn in "assembled" coordinates (origin = feet)
-function piece(g, kind) {
-  switch (kind) {
-    case 'legs': g.fillStyle = '#4a4f5e'; g.fillRect(-9, -28, 8, 26); g.fillRect(1, -28, 8, 26); g.fillStyle = '#111'; g.fillRect(-11, -3, 10, 4); g.fillRect(1, -3, 10, 4); break;
-    case 'torso': g.fillStyle = '#3a3f4e'; g.beginPath(); g.roundRect(-12, -58, 24, 32, 4); g.fill(); g.fillStyle = '#fff'; g.beginPath(); g.moveTo(-5, -58); g.lineTo(5, -58); g.lineTo(0, -44); g.fill(); g.fillStyle = '#c8402f'; g.beginPath(); g.moveTo(-2, -57); g.lineTo(2, -57); g.lineTo(3, -40); g.lineTo(0, -36); g.lineTo(-3, -40); g.fill(); break;
-    case 'arms': g.fillStyle = '#3a3f4e'; g.fillRect(-19, -56, 6, 22); g.fillRect(13, -56, 6, 22); g.fillStyle = '#f0c39a'; g.fillRect(-19, -34, 6, 6); g.fillRect(13, -34, 6, 6); break;
-    case 'head': ell(g, 0, -70, 11, 11, '#f0c39a'); g.fillStyle = '#222'; g.fillRect(-5, -72, 2.5, 3); g.fillRect(3, -72, 2.5, 3); g.fillStyle = '#5a3a1a'; g.beginPath(); g.ellipse(0, -65, 7, 2.5, 0, 0, 6.283); g.fill(); break;
-    case 'toupee': ell(g, 0, -80, 11, 5, '#6b3d14'); ell(g, -5, -78, 6, 4, '#7a4718'); ell(g, 6, -81, 5, 3.5, '#7a4718'); break;
-    case 'trophy': g.fillStyle = '#ffd84a'; g.fillRect(-12, -14, 24, 6); g.fillStyle = '#e0b020'; g.fillRect(-12, -8, 24, 4); g.fillRect(-12, -18, 6, 4); break;
-  }
+function cubeAt(g, x, y, s, col) {      // small oblique cube, x/y = top-left of its front face
+  const d = s * .32;
+  g.fillStyle = shade(col, 34); g.beginPath(); g.moveTo(x, y); g.lineTo(x + d, y - d); g.lineTo(x + s + d, y - d); g.lineTo(x + s, y); g.fill();
+  g.fillStyle = shade(col, -26); g.beginPath(); g.moveTo(x + s, y); g.lineTo(x + s + d, y - d); g.lineTo(x + s + d, y + s - d); g.lineTo(x + s, y + s); g.fill();
+  g.fillStyle = col; g.fillRect(x, y, s, s);
+  g.strokeStyle = 'rgba(0,0,0,.28)'; g.lineWidth = Math.max(.6, s / 18); g.strokeRect(x, y, s, s);
 }
-const PIECE_CY = { legs: -14, torso: -42, arms: -43, head: -70, toupee: -80, trophy: -10 };
-function bossFigure(g, x, y, s, have) {
-  g.save(); g.translate(x, y); g.scale(s, s);
-  for (const k of ORDER) { g.globalAlpha = have.includes(k) ? 1 : .18; if (!have.includes(k)) g.filter = 'grayscale(1)'; piece(g, k); g.filter = 'none'; }
-  g.restore(); g.globalAlpha = 1;
+const cubeCol = id => id >= 0 ? CELLS[id].col : GOLD;
+function bossFigure(g, x, y, s, gap = 'rgba(255,255,255,.22)') {   // x = centre, y = bottom
+  const x0 = x - s * 2.5;
+  CELLS.forEach((c, i) => {
+    const X = x0 + c.c * s, Y = y - (MODEL.length - c.r) * s;
+    if (!have[i]) { g.strokeStyle = gap; g.lineWidth = 1; g.strokeRect(X + .5, Y + .5, s - 1, s - 1); return; }
+    cubeAt(g, X, Y, s, c.col);
+    if (c.r === 1 && c.c !== 2) { g.fillStyle = '#222'; g.fillRect(X + s * .35, Y + s * .3, s * .3, s * .3); }
+    if (c.r === 1 && c.c === 2) { g.fillStyle = '#5a3a1a'; g.fillRect(X + s * .05, Y + s * .6, s * .9, s * .22); }
+  });
 }
+const count = () => have.filter(Boolean).length;
 
 // ---------------------------------------------------------------- render
 function drawMini() {
@@ -579,6 +619,11 @@ function drawMini() {
   }
   const dot = (x, y, c, r = 2.5) => { g.fillStyle = c; g.beginPath(); g.arc((x - y) * 1.5 + N * 1.5, (x + y) * .75, r, 0, 6.283); g.fill(); };
   const e = level.elev; if (level.seen[I(e.x, e.y)]) dot(e.x, e.y, elevOpen ? '#5f5' : '#f55');
+  if (elevOpen) {
+    for (const st of level.hidden) if (st.cube !== undefined) dot(st.x + .5, st.y + .5, '#6cf');
+    for (const k of pickups) if (k.kind === 'cube') dot(k.x, k.y, '#6cf');
+    for (const en of enemies) if (en.cube !== undefined) dot(en.x, en.y, '#6cf');
+  }
   dot(player.x, player.y, '#ffd84a', 3);
 }
 
@@ -611,19 +656,23 @@ function render() {
   for (const q of projs) list.push({ k: q.x + q.y, q });
   list.push({ k: p.x + p.y, me: true });
   list.sort((a, b) => a.k - b.k);
+  const glints = [];
   const pk = p.x + p.y, psx = sx(p.x, p.y), psy = sy(p.x, p.y);
   for (const it of list) {
     if (it.wall) drawWall(it);
     else if (it.prop) {
       const X = sx(it.x + .5, it.y + .5) - psx, Y = sy(it.x + .5, it.y + .5) - psy;
       const hide = it.k > pk && Math.abs(X) < 34 && Y > 0 && Y < 52;
-      if (hide) ctx.globalAlpha = .45; drawProp(it); ctx.globalAlpha = 1;
+      if (hide) ctx.globalAlpha = .45;
+      if (it.shakeT > 0) { ctx.save(); ctx.translate(Math.sin(time * 70) * 2.5, 0); drawProp(it); ctx.restore(); } else drawProp(it);
+      ctx.globalAlpha = 1;
+      if (it.cube !== undefined) glints.push(it);
     } else if (it.e) {
       const e = it.e, X = sx(e.x, e.y), Y = sy(e.x, e.y);
       person(X, Y, e.look, { face: e.face, walk: e.walk, moving: e.moving, flash: e.flash, angry: e.awake, wind: e.state === 'wind' });
       const hh = 52 * (e.look.s || 1);
-      if (e.boss) { ctx.save(); ctx.translate(X, Y - hh - 14 + Math.sin(time * 4) * 3 - PIECE_CY[e.piece] * .7); ctx.scale(.7, .7); piece(ctx, e.piece); ctx.restore(); }
-      else if (e.hp < e.maxHp) { ctx.fillStyle = '#000a'; ctx.fillRect(X - 12, Y - hh, 24, 4); ctx.fillStyle = '#f55'; ctx.fillRect(X - 11, Y - hh + 1, 22 * e.hp / e.maxHp, 2); }
+      if (e.cube !== undefined) { const cs = e.boss ? 20 : 12; cubeAt(ctx, X - cs / 2, Y - hh - cs - 4 + Math.sin(time * 4 + e.x) * 2, cs, cubeCol(e.cube)); }
+      if (e.boss) {} else if (e.hp < e.maxHp) { ctx.fillStyle = '#000a'; ctx.fillRect(X - 12, Y - hh, 24, 4); ctx.fillStyle = '#f55'; ctx.fillRect(X - 11, Y - hh + 1, 22 * e.hp / e.maxHp, 2); }
       if (!e.awake) { ctx.fillStyle = '#fff'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.fillText('z', X + 8, Y - hh - 2 + Math.sin(time * 2 + X) * 2); }
     } else if (it.pk) {
       const k = it.pk, X = sx(k.x, k.y), Y = sy(k.x, k.y), b = Math.sin(time * 4 + k.x) * 3;
@@ -631,8 +680,9 @@ function render() {
       if (k.kind === 'coffee') { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(X - 6, Y - 20 + b, 12, 13, 2); ctx.fill(); ctx.fillStyle = '#6b3d14'; ctx.fillRect(X - 5, Y - 19 + b, 10, 3); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X + 7, Y - 13 + b, 4, -1.4, 1.4); ctx.stroke(); }
       else if (k.kind === 'donut') { ctx.strokeStyle = '#f48fb1'; ctx.lineWidth = 6; ctx.beginPath(); ctx.ellipse(X, Y - 14 + b, 7, 5, 0, 0, 6.283); ctx.stroke(); }
       else {
-        ctx.save(); ctx.translate(X, Y - 26 + b); const gl = ctx.createRadialGradient(0, 0, 2, 0, 0, 30); gl.addColorStop(0, 'rgba(255,220,90,.7)'); gl.addColorStop(1, 'rgba(255,220,90,0)'); ctx.fillStyle = gl; ctx.fillRect(-30, -30, 60, 60);
-        ctx.translate(0, -PIECE_CY[k.piece]); piece(ctx, k.piece); ctx.restore();
+        const hz = k.hop > 0 ? Math.sin(k.hop / .4 * Math.PI) * 26 : 0, c = cubeCol(k.id);
+        const gl = ctx.createRadialGradient(X, Y - 12, 2, X, Y - 12, 30); gl.addColorStop(0, 'rgba(255,220,90,.6)'); gl.addColorStop(1, 'rgba(255,220,90,0)'); ctx.fillStyle = gl; ctx.fillRect(X - 30, Y - 42, 60, 60);
+        block(k.x - .5, k.y - .5, .3, 13, shade(c, 34), c, shade(c, -26), 5 + b + hz);
       }
     } else if (it.q) {
       const q = it.q, X = sx(q.x, q.y), Y = sy(q.x, q.y);
@@ -649,6 +699,11 @@ function render() {
   // particles + world labels
   for (const q of parts) { ctx.fillStyle = q.c; ctx.save(); ctx.translate(sx(q.x, q.y), sy(q.x, q.y) - q.z); ctx.rotate(q.rot + q.t * 9); ctx.globalAlpha = Math.min(1, q.t * 3); ctx.fillRect(-2.5, -2, 5, 4); ctx.restore(); }
   ctx.globalAlpha = 1; ctx.textAlign = 'center';
+  for (const st of glints) {      // a hidden cube gives itself away with an occasional twinkle
+    const ph = (time * .45 + st.x * .37 + st.y * .21) % 1; if (ph > .2) continue;
+    const r = Math.sin(ph / .2 * Math.PI) * 9, X = sx(st.x + .5, st.y + .5) + 6, Y = sy(st.x + .5, st.y + .5) - 26;
+    ctx.fillStyle = '#fff6b0'; ctx.beginPath(); ctx.moveTo(X, Y - r); ctx.lineTo(X + r * .25, Y - r * .25); ctx.lineTo(X + r, Y); ctx.lineTo(X + r * .25, Y + r * .25); ctx.lineTo(X, Y + r); ctx.lineTo(X - r * .25, Y + r * .25); ctx.lineTo(X - r, Y); ctx.lineTo(X - r * .25, Y - r * .25); ctx.fill();
+  }
   ctx.font = 'bold 12px "Courier New", monospace';
   ctx.fillStyle = elevOpen ? '#8f8' : '#f88'; ctx.fillText(elevOpen ? '▲ ELEVATOR' : 'ELEVATOR LOCKED', ex, ey - 24 + Math.sin(time * 3) * 2);
   for (const t of texts) {
@@ -676,10 +731,11 @@ function render() {
   const dr = clamp(1 - p.dashCd / p.dashMax, 0, 1);
   ctx.fillStyle = 'rgba(255,255,255,.2)'; ctx.fillRect(16, 64, 90, 5); ctx.fillStyle = dr >= 1 ? '#8fd0ff' : '#667'; ctx.fillRect(16, 64, 90 * dr, 5);
   ctx.font = '10px "Courier New", monospace'; ctx.fillStyle = 'rgba(255,255,255,.6)'; ctx.fillText('ROLL', 112, 70);
+  ctx.font = 'bold 12px "Courier New", monospace'; ctx.fillStyle = floorFound >= PER_FLOOR ? '#8f8' : GOLD; ctx.fillText(`CUBES ON THIS FLOOR ${floorFound}/${PER_FLOOR}`, 16, 90);
   // boss assembly + minimap
-  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.roundRect(W - 78, 10, 68, 112, 6); ctx.fill();
-  bossFigure(ctx, W - 44, 104, 1, pieces);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 11px "Courier New", monospace'; ctx.fillText(`${pieces.length}/5${trophies ? ' +' + trophies : ''}`, W - 44, 118);
+  ctx.fillStyle = 'rgba(120,128,150,.55)'; ctx.beginPath(); ctx.roundRect(W - 78, 10, 68, 112, 6); ctx.fill();
+  bossFigure(ctx, W - 46, 102, 10);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 11px "Courier New", monospace'; ctx.fillText(`${count()}/${CELLS.length}${spare ? ' +' + spare : ''}`, W - 44, 117);
   if (level.mini) { ctx.globalAlpha = .9; ctx.drawImage(level.mini, W - 10 - N * 3, 130); ctx.globalAlpha = 1; }
   // boss bar
   if (bossRef && bossRef.hp > 0) {
@@ -702,15 +758,16 @@ function render() {
 
 // ---------------------------------------------------------------- screens
 function show(html) { overlay.innerHTML = `<div class="memo">${html}</div>`; overlay.className = 'on'; }
-function figureCanvas(have) {
+function figureCanvas() {
   const c = overlay.querySelector('canvas'); if (!c) return;
-  c.width = 220; c.height = 200; bossFigure(c.getContext('2d'), 110, 190, 2, have);
+  c.width = 220; c.height = 200; bossFigure(c.getContext('2d'), 104, 192, 21, 'rgba(0,0,0,.25)');
 }
 function showTitle() {
   state = 'title';
   show(`<small>INTEROFFICE MEMO</small><h1>RESTRUCTURED</h1><h2>an office roguelite</h2>
-  <p>Corporate announced a restructuring. Nobody expected them to mean <b>the boss himself</b>.</p>
-  <p>Mr. Bossman has been taken apart, and your coworkers have… <i>repurposed</i> the pieces. Fight through five ever-changing floors, recover all five parts, and put him back together before the quarterly review.</p>
+  <p>Mr. Bossman is the biggest man in the company. Forty feet tall, give or take a floor.</p>
+  <p>Corporate announced a restructuring, and for reasons Legal is still reviewing, he has been <b>divided into ${CELLS.length} cubes</b> and scattered across the office. Some are stuffed inside furniture. Some your coworkers have… <i>repurposed</i>.</p>
+  <p>Search five ever-changing floors, ${PER_FLOOR} cubes each. Staple anything suspicious: hidden cubes twinkle, and furniture gives them up when hit.</p>
   <p class="keys"><b>Move</b> WASD / arrows &nbsp;·&nbsp; <b>Throw staples</b> aim with mouse, hold click<br><b>Chair roll</b> Space (dodges everything) &nbsp;·&nbsp; <b>Mute</b> M<br><b>Touch</b> left thumb moves, right thumb aims and fires</p>
   <div class="btns"><button id="go">CLOCK IN ▶</button></div>`);
   $('#go').onclick = newGame;
@@ -718,7 +775,7 @@ function showTitle() {
 function showPerks() {
   state = 'perk';
   const opts = [...PERKS].sort(() => Math.random() - .5).slice(0, 3);
-  show(`<small>ELEVATOR · GOING UP</small><h1>PICK A PERK</h1><h2>HR says you've earned exactly one.</h2>
+  show(`<small>ELEVATOR · GOING UP</small><h1>PICK A PERK</h1><h2>${floorFound >= PER_FLOOR ? 'Every cube on that floor recovered.' : `You left ${PER_FLOOR - floorFound} cube${PER_FLOOR - floorFound > 1 ? 's' : ''} behind on that floor.`} HR says you've earned exactly one.</h2>
   <div class="btns">${opts.map((o, i) => `<button data-i="${i}">${i + 1}. ${o.n}<span>${o.d}</span></button>`).join('')}</div>`);
   overlay.querySelectorAll('button').forEach(b => b.onclick = () => choosePerk(opts[+b.dataset.i]));
   showPerks.opts = opts;
@@ -726,16 +783,17 @@ function showPerks() {
 function choosePerk(o) { o.f(player); floor++; startFloor(); }
 function showDead() {
   show(`<small>NOTICE OF TERMINATION</small><h1>YOU'VE BEEN LET GO</h1><h2>Effective immediately.</h2>
-  <p>Reached <b>floor ${floor}</b> · recovered <b>${pieces.length}/5</b> boss parts · sent <b>${kills}</b> coworkers out of office.</p>
+  <p>Reached <b>floor ${floor}</b> · recovered <b>${count()}/${CELLS.length}</b> boss cubes · sent <b>${kills}</b> coworkers out of office.</p>
   <canvas></canvas><div class="btns"><button id="go">RE-APPLY ▶</button></div>`);
-  figureCanvas(pieces); $('#go').onclick = newGame;
+  figureCanvas(); $('#go').onclick = newGame;
 }
 function showWin() {
   state = 'win';
-  show(`<small>PERFORMANCE REVIEW</small><h1>BOSS REASSEMBLED</h1><h2>Some assembly was required.</h2><canvas></canvas>
-  <p><i>"Great. Now, where are we on those reports?"</i></p><p>${kills} coworkers are currently out of office.</p>
-  <div class="btns"><button id="ot">WORK OVERTIME<span>Endless floors, harder each time</span></button><button id="go">NEW GAME</button></div>`);
-  figureCanvas(pieces); $('#go').onclick = newGame; $('#ot').onclick = () => { overtime = true; showPerks(); };
+  const n = count(), miss = CELLS.length - n, pct = Math.round(n / CELLS.length * 100);
+  show(`<small>PERFORMANCE REVIEW</small><h1>${miss ? `BOSS ${pct}% REASSEMBLED` : 'BOSS REASSEMBLED'}</h1><h2>${miss ? `He is missing ${miss} cube${miss > 1 ? 's' : ''}. He has noticed.` : 'All forty feet of him.'}</h2><canvas></canvas>
+  <p><i>"${miss ? 'Where is the rest of me? And where are we on those reports?' : 'Great. Now, where are we on those reports?'}"</i></p><p>${kills} coworkers are currently out of office.</p>
+  <div class="btns"><button id="ot">WORK OVERTIME<span>${miss ? 'Endless floors holding the cubes you missed' : 'Endless floors, golden spare cubes'}</span></button><button id="go">NEW GAME</button></div>`);
+  figureCanvas(); $('#go').onclick = newGame; $('#ot').onclick = () => { overtime = true; showPerks(); };
 }
 
 // ---------------------------------------------------------------- input
@@ -778,7 +836,7 @@ function frame(ts) {
   render();
   requestAnimationFrame(frame);
 }
-window.__game = { get s() { return { state, floor, player, enemies, pieces, level, elevOpen, pickups }; } };
+window.__game = { get s() { return { state, floor, player, enemies, have, level, elevOpen, pickups, floorFound }; }, search(x, y) { searchProp(x, y); }, kill(e) { hitEnemy(e, 999, 0, 0); } };
 showTitle();
 requestAnimationFrame(frame);
 })();
